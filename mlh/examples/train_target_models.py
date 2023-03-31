@@ -1,5 +1,10 @@
 import os
-import torchvision
+import sys
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+sys.path.append(BASE_DIR)
+
 from mlh.defenses.membership_inference.AdvReg import TrainTargetAdvReg
 from mlh.defenses.membership_inference.DPSGD import TrainTargetDP
 from mlh.defenses.membership_inference.LabelSmoothing import TrainTargetLabelSmoothing
@@ -10,6 +15,7 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision
 from mlh.data_preprocessing.data_loader import GetDataLoader
 from torchvision import datasets
 import torchvision.transforms as transforms
