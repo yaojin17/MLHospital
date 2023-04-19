@@ -220,8 +220,8 @@ class MembershipInferenceAttack(abc.ABC):
         precision = precision_score(label, pred_label)
         recall = recall_score(label, pred_label)
         f1 = f1_score(label, pred_label)
-        auc = roc_auc_score(label, pred_posteriors)
-
+        # auc = roc_auc_score(label, pred_posteriors)
+        auc = 0
         return acc, precision, recall, f1, auc
 
     @staticmethod
@@ -355,7 +355,10 @@ class MetricBasedMIA(MembershipInferenceAttack):
                           == self.s_te_labels).astype(int)
         self.t_tr_corr = (np.argmax(self.t_tr_outputs, axis=1)
                           == self.t_tr_labels).astype(int)
-        self.t_te_corr = (np.argmax(self.t_te_outputs, axis=1)
+        if len(self.t_te_outputs) == 0:
+            self.t_te_corr = np.array([])
+        else:
+            self.t_te_corr = (np.argmax(self.t_te_outputs, axis=1)
                           == self.t_te_labels).astype(int)
 
         # prediction confidence
@@ -388,9 +391,14 @@ class MetricBasedMIA(MembershipInferenceAttack):
         return -np.log(np.maximum(probs, small_value))
 
     def _entr_comp(self, probs):
-        return np.sum(np.multiply(probs, self._log_value(probs)), axis=1)
+        if len(probs) == 0:
+            return np.array([])
+        else:
+            return np.sum(np.multiply(probs, self._log_value(probs)), axis=1)
 
     def _m_entr_comp(self, probs, true_labels):
+        if len(probs) == 0:
+            return np.array([])
         log_probs = self._log_value(probs)
         reverse_probs = 1-probs
         log_reverse_probs = self._log_value(reverse_probs)
@@ -406,9 +414,9 @@ class MetricBasedMIA(MembershipInferenceAttack):
         value_list = np.concatenate((tr_values, te_values))
         thre, max_acc = 0, 0
         for value in value_list:
-            tr_ratio = np.sum(tr_values >= value)/(len(tr_values)+0.0)
-            te_ratio = np.sum(te_values < value)/(len(te_values)+0.0)
-            acc = 0.5*(tr_ratio + te_ratio)
+            tr_correct = np.sum(tr_values >= value)
+            te_correct = np.sum(te_values < value)
+            acc = (tr_correct + te_correct) / (len(tr_values)+len(te_values)+0.0)
             if acc > max_acc:
                 thre, max_acc = value, acc
         return thre

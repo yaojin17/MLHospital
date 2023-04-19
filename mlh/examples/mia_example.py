@@ -1,4 +1,9 @@
 import torchvision
+import os
+import sys
+sys.path.append('/u/nkp2mr/yaojin/MLHospital')
+sys.path.append('/u/nkp2mr/yaojin/')
+
 from mlh.attacks.membership_inference.attacks import AttackDataset, BlackBoxMIA, MetricBasedMIA, LabelOnlyMIA
 from tqdm import tqdm
 import torch
@@ -9,11 +14,21 @@ from torchvision import datasets
 import torchvision.transforms as transforms
 import argparse
 import numpy as np
+import random
 import torch.optim as optim
-torch.manual_seed(0)
-np.random.seed(0)
-torch.set_num_threads(1)
+from transfer.get_corresponding_model import get_model_based_on_name
+from transfer.get_cifar10_transfer_dataset import cifar10_transfer_dataloader
+from transfer.get_modified_model import get_modified_model
+from transfer.utils.helpers import str2bool
 
+seed = 41
+np.random.seed(seed)
+random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = True
 
 def parse_args():
     parser = argparse.ArgumentParser('argument for training')
@@ -29,11 +44,11 @@ def parse_args():
                         help='gpu index used for training')
 
     # model dataset
-    parser.add_argument('--model', type=str, default='resnet18')
+    parser.add_argument('--model', type=str, default='resnet50')
     parser.add_argument('--load-pretrained', type=str, default='no')
     parser.add_argument('--dataset', type=str, default='CIFAR10',
                         help='dataset')
-    parser.add_argument('--num-class', type=int, default=10,
+    parser.add_argument('--num_class', type=int, default=5,
                         help='number of classes')
     parser.add_argument('--training_type', type=str, default="Normal",
                         help='Normal, LabelSmoothing, AdvReg, DP, MixupMMD, PATE')
@@ -41,13 +56,16 @@ def parse_args():
                         help='if yes, load pretrained attack model to inference')
     parser.add_argument('--attack_type', type=str, default='black-box',
                         help='attack type: "black-box", "black-box-sorted", "black-box-top3", "metric-based", and "label-only"')
-    parser.add_argument('--data-path', type=str, default='../datasets/',
+    parser.add_argument('--data_path', type=str, default='../datasets/',
                         help='data_path')
     parser.add_argument('--input-shape', type=str, default="32,32,3",
                         help='comma delimited input shape input')
     parser.add_argument('--log_path', type=str,
                         default='./save', help='')
-
+    parser.add_argument('--poison', default=True, type=str2bool, 
+                    help='whether source training dataset is poisoned')
+    parser.add_argument('--replicate', '-r', default=1, type=int)
+    
     args = parser.parse_args()
 
     args.input_shape = [int(item) for item in args.input_shape.split(',')]
@@ -56,13 +74,13 @@ def parse_args():
     return args
 
 
-def get_target_model(name="resnet18", num_classes=10):
-    if name == "resnet18":
-        model = torchvision.models.resnet18()
-        model.fc = nn.Sequential(nn.Linear(512, 10))
-    else:
-        raise ValueError("Model not implemented yet :P")
-    return model
+# def get_target_model(name="resnet50", num_classes=10):
+#     if name == "resnet18":
+#         model = torchvision.models.resnet18()
+#         model.fc = nn.Sequential(nn.Linear(512, num_classes))
+#     else:
+#         raise ValueError("Model not implemented yet :P")
+#     return model
 
 
 def evaluate(model, dataloader):
@@ -84,18 +102,35 @@ if __name__ == "__main__":
 
     args = parse_args()
     s = GetDataLoader(args)
-    target_train_loader, target_inference_loader, target_test_loader, shadow_train_loader, shadow_inference_loader, shadow_test_loader = s.get_data_supervised()
+    r = args.replicate
+    # target_train_loader, target_inference_loader, target_test_loader, shadow_train_loader, shadow_inference_loader, shadow_test_loader = s.get_data_supervised()
 
-    target_model = get_target_model(name="resnet18", num_classes=10)
-    shadow_model = get_target_model(name="resnet18", num_classes=10)
+    target_train_loader, target_test_loader = cifar10_transfer_dataloader(mode = 'student',target = True)
+    shadow_train_loader, shadow_test_loader = cifar10_transfer_dataloader(mode = 'shadow')
+    
+    target_model = get_model_based_on_name(args.model, args.num_class)
+    shadow_model = get_model_based_on_name(args.model, args.num_class)
+    target_model = get_modified_model(args.model, target_model, args.num_class, freeze=True, is_parallel=False)
+    shadow_model = get_modified_model(args.model, shadow_model, args.num_class, freeze=True, is_parallel=False)
 
     # load target/shadow model to conduct the attacks
-    target_model.load_state_dict(torch.load(
-        f'{args.log_path}/{args.dataset}/{args.training_type}/target/{args.model}.pth'))
+    # target_model.load_state_dict(torch.load(
+    #     f'{args.log_path}/{args.dataset}/{args.training_type}/target/{args.model}.pth'))
+    student_folder = '/u/nkp2mr/yaojin/transfer/model_states/student_model'
+    if args.poison:
+        target_path = os.path.join(student_folder, 'cifar10_first_5_poisoned_to_cifar10_last_5_student', f'{args.model}_r{r}.pth')
+    else:
+        target_path = os.path.join(student_folder, 'cifar10_last_5_student/resnet50_rerun.pth')
+    target_model.load_state_dict(torch.load(target_path))
     target_model = target_model.to(args.device)
 
-    shadow_model.load_state_dict(torch.load(
-        f'{args.log_path}/{args.dataset}/{args.training_type}/shadow/{args.model}.pth'))
+    # shadow_model.load_state_dict(torch.load(
+    #     f'{args.log_path}/{args.dataset}/{args.training_type}/shadow/{args.model}.pth'))
+    if args.poison:
+        shadow_path = os.path.join(student_folder, 'cifar10_first_5_poisoned_to_cifar10_last_5_shadow', f'{args.model}_r{r}.pth')
+    else:
+        shadow_path = os.path.join(student_folder, 'cifar10_last_5_shadow/resnet50_rerun.pth')
+    shadow_model.load_state_dict(torch.load(shadow_path))
     shadow_model = shadow_model.to(args.device)
 
     # generate attack dataset
